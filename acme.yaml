@@ -1,0 +1,96 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: acme-ca
+  namespace: pmsm-management
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+  volumeMode: Filesystem
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: casetup
+  namespace: pmsm-management 
+data:
+  casetup.sh: |
+    #!/bin/bash
+    set -x
+    cp -rv /data/* /home/step/
+    cd /home/step
+    export CONFIG_FILE=${CONFIG_FILE-"/home/step/config/ca.json"}
+    export PASSWORD_FILE=${PASSWORD_FILE-"/home/step/secrets/password"}
+    export PASSWORD=${PASSWORD-"password"}
+    if [ ! -f "${PASSWORD_FILE}" ]; then
+      mkdir -p $(dirname $PASSWORD_FILE)
+      echo $PASSWORD > $PASSWORD_FILE
+    fi
+    if [ -f "${CONFIG_FILE}" ]; then
+      echo "Using existing configuration file"
+    else
+      echo "No configuration file found at ${CONFIG_FILE}"
+      /usr/local/bin/step ca init --name "Fake Authority" --provisioner admin --dns "acme.unusual.one" --address ":443" --password-file=${PASSWORD_FILE}
+      /usr/local/bin/step ca provisioner add development --type ACME
+      # Increase certificate validity period
+      echo $(cat config/ca.json | jq '.authority.provisioners[[.authority.provisioners[] | .name=="development"] | index(true)].claims |= (. + {"maxTLSCertDuration":"2160h","defaultTLSCertDuration":"720h"})') > config/ca.json
+    fi
+    /usr/local/bin/step-ca --password-file $PASSWORD_FILE $CONFIG_FILE
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: acme
+  namespace: pmsm-management
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: acme
+  template:
+    metadata:
+      labels:
+        app: acme
+    spec:
+      containers:
+        - name: acme
+          image: katoni/simple-acme-server
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+            privileged: true
+          command:
+            - "bash"
+            - "/setup/casetup.sh"
+          volumeMounts:
+            - mountPath: /setup/
+              name: casetup
+            - mountPath: /data
+              name: acme-ca
+      volumes:
+        - name: casetup
+          configMap:
+            name: casetup
+        - name: acme-ca
+          persistentVolumeClaim:
+            claimName: acme-ca
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: acme
+  namespace: pmsm-management
+spec:
+  selector:
+    app: acme
+  type: ClusterIP
+  ports:
+    - name: https
+      port: 443
+      protocol: TCP
+      targetPort: 443
