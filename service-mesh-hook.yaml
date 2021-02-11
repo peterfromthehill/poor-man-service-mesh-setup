@@ -1,0 +1,80 @@
+# openssl req -x509 -newkey rsa:4096 -keyout /ca/key.pem -out /ca/cert.pem -days 365 -nodes -subj "/C=GB/ST=London/L=London/O=Global Security/OU=IT Department/CN=example.com"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook
+  namespace: pmsm-management
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webhook
+  template:
+    metadata:
+      labels:
+        app: webhook
+    spec:
+      containers:
+        - name: golang
+          image: golang
+          securityContext:
+            privileged: true
+          command: ["sh", "-c", "tail -f /dev/null"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: poor-man-hook
+  namespace: pmsm-management
+spec:
+  ports:
+    - name: http
+      port: 443
+      protocol: TCP
+      targetPort: 4443
+  selector:
+    app: webhook
+  type: ClusterIP
+---
+apiVersion: admissionregistration.k8s.io/v1beta1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: poor-man-webhook-config
+webhooks:
+  - name: poor.man.webhook
+    # sideEffects: None
+    # admissionReviewVersions: ["v1"]
+    clientConfig:
+      caBundle: base64CA
+      service:
+        name: poor-man-hook
+        namespace: pmsm-management
+        path: "/mutate/pod"
+    rules:
+      - operations: ["CREATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+    failurePolicy: Fail
+    namespaceSelector:
+      matchLabels:
+        pmsm: enabled
+   - name: poor.man.webhook.svc
+     sideEffects: None
+     admissionReviewVersions: ["v1"]
+     clientConfig:
+       caBundle: base64CA
+       service:
+         name: poor-man-hook-svc
+         namespace: pmsm-management
+         path: "/mutate/service"
+     rules:
+       - operations: ["CREATE", "UPDATE"]
+         apiGroups: [""]
+         apiVersions: ["v1"]
+         resources: ["services"]
+     failurePolicy: Ignore
+     namespaceSelector:
+       matchLabels:
+         pmsm: enabled

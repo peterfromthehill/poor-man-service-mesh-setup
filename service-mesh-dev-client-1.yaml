@@ -1,0 +1,125 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: setup-iptables
+  namespace: pmsm
+data:
+  setup-iptables.sh: |
+    #!/bin/bash
+
+    USERID=1337
+    INBOUND=15006
+    OUTBOUND=15001
+
+    POSITIONAL=()
+    while [[ $# -gt 0 ]]; do
+      key="$1"
+
+      case $key in
+          -i|--inbound)
+          INBOUND="$2"
+          shift # past argument
+          shift # past value
+          ;;
+          -o|--outbound)
+          OUTBOUND="$2"
+          shift # past argument
+          shift # past value
+          ;;
+          -u|--userid)
+          USERID="$2"
+          shift # past argument
+          shift # past value
+          ;;
+          --default)
+          DEFAULT=YES
+          shift # past argument
+          ;;
+          *)    # unknown option
+          POSITIONAL+=("$1") # save it in an array for later
+          shift # past argument
+          ;;
+      esac
+    done
+    set -- "${POSITIONAL[@]}" # restore positional parameters
+
+    echo "UserId: ${USERID}"
+    echo "Inbound: ${INBOUND}"
+    echo "Outbound: ${OUTBOUND}"
+    iptables -t nat -I OUTPUT -m owner ! --uid-owner ${USERID} -p tcp -j REDIRECT --to-port ${OUTBOUND}
+    iptables -t nat -I PREROUTING -p tcp -j REDIRECT --to-port ${INBOUND}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    pmsm/ignore: "true"
+  name: client-1
+  namespace: pmsm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: client-1
+  template:
+    metadata:
+      annotations:
+        pmsm/ignore: "true"
+      labels:
+        app: client-1
+    spec:
+      containers:
+        - name: whoami
+          image: containous/whoami
+        - name: netshoot
+          image: nicolaka/netshoot
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+            privileged: true
+          command:
+            - tail
+            - -f
+            - /dev/null
+        - name: golang
+          image: golang
+          securityContext:
+            runAsUser: 1337
+            runAsGroup: 1337
+            capabilities:
+              add:
+                - NET_ADMIN
+            privileged: true
+          command: ["sh", "-c", "tail -f /dev/null"]
+      initContainers:
+        - name: init-networking
+          image: nicolaka/netshoot
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+            privileged: true
+          command: ["bash", "/setup/setup-iptables.sh"]
+          volumeMounts:
+            - mountPath: /setup/
+              name: setup
+      volumes:
+        - name: setup
+          configMap:
+            name: setup-iptables
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: client-1
+  namespace: pmsm
+spec:
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+  selector:
+    app: client-1
+  type: ClusterIP

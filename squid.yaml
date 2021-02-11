@@ -1,0 +1,135 @@
+---
+apiVersion: v1
+data:
+  squid-reload.sh: |
+    #!/bin/bash
+    touch /tmp/configMD5
+    md5sum -c /tmp/configMD5
+    if [ $? -ne 0 ]; then
+      md5sum /conf/squid.conf > /tmp/configMD5
+      kill -HUP $(cat /run/squid.pid)
+    fi
+    exit 0
+kind: ConfigMap
+metadata:
+  name: squid-reload
+  namespace: pmsm-management
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: proxy-configmap
+  namespace: pmsm-management
+data:
+  squid.conf: |
+    access_log stdio:/dev/stdout
+    cache_log  stdio:/dev/stdout
+    logfile_rotate 0
+
+    acl localnet src 10.0.0.0/8
+    acl localnet src 172.16.0.0/16
+
+    acl SSL_ports port 443
+    acl Safe_ports port 80          # http
+    acl Safe_ports port 21          # ftp
+    acl Safe_ports port 443         # https
+    acl Safe_ports port 70          # gopher
+    acl Safe_ports port 210         # wais
+    acl Safe_ports port 1025-65535  # unregistered ports
+    acl Safe_ports port 280         # http-mgmt
+    acl Safe_ports port 488         # gss-http
+    acl Safe_ports port 591         # filemaker
+    acl Safe_ports port 777         # multiling http
+    acl CONNECT method CONNECT
+
+    #http_access deny CONNECT !SSL_ports
+    http_access allow localhost manager
+    http_access deny manager
+    http_access allow localhost
+    http_access allow localnet
+    http_access deny all
+
+    http_port 0.0.0.0:3128
+
+    pinger_enable off
+    coredump_dir /tmp
+    debug_options ALL,1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: squid
+  namespace: pmsm-management
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: squid
+  template:
+    metadata:
+      labels:
+        app: squid
+    spec:
+      containers:
+        - image: jacobalberty/squid
+          imagePullPolicy: IfNotPresent
+          name: squid
+          livenessProbe:
+            exec:
+              command:
+                - bash
+                - /squid/squid-reload.sh
+          volumeMounts:
+            - mountPath: /conf
+              name: proxy-config
+              readOnly: true
+            - mountPath: /squid
+              name: squid-reload
+              readOnly: true
+          resources:
+            limits:
+              cpu: 100m
+              memory: 200Mi
+            requests:
+              cpu: 1m
+              memory: 100Mi
+      volumes:
+        - configMap:
+            defaultMode: 420
+            name: proxy-configmap
+          name: proxy-config
+        - configMap:
+            defaultMode: 420
+            name: squid-reload
+          name: squid-reload
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: squid
+  namespace: pmsm-management
+spec:
+  selector:
+    app: squid
+  type: ClusterIP
+  ports:
+    - name: httpsrc
+      port: 80
+      protocol: TCP
+      targetPort: 3129
+    - name: httpssrc
+      port: 443
+      protocol: TCP
+      targetPort: 3130
+    - name: icu
+      port: 3128
+      protocol: TCP
+      targetPort: 3128
+    - name: http
+      port: 3129
+      protocol: TCP
+      targetPort: 3129
+    - name: https
+      port: 3130
+      protocol: TCP
+      targetPort: 3130

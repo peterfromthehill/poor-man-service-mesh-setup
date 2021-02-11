@@ -1,0 +1,75 @@
+# openssl req -x509 -newkey rsa:4096 -keyout /ca/key.pem -out /ca/cert.pem -days 365 -nodes -subj "/C=GB/ST=London/L=London/O=Global Security/OU=IT Department/CN=example.com"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    pmsm/ignore: "true"
+  name: client-2
+  namespace: pmsm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: client-2
+  template:
+    metadata:
+      annotations:
+        pmsm/ignore: "true"
+      labels:
+        app: client-2
+    spec:
+      containers:
+        - name: whoami
+          image: containous/whoami
+        - name: netshoot
+          image: nicolaka/netshoot
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+            privileged: true
+          command:
+            - tail
+            - -f
+            - /dev/null
+        - name: golang
+          image: golang
+          securityContext:
+            runAsUser: 1337
+            runAsGroup: 1337
+            capabilities:
+              add:
+                - NET_ADMIN
+            privileged: true
+          command: ["sh", "-c", "tail -f /dev/null"]
+      initContainers:
+        - name: init-networking
+          image: nicolaka/netshoot
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+            privileged: true
+          command: ["bash", "/setup/setup-iptables.sh"]
+          volumeMounts:
+            - mountPath: /setup/
+              name: setup
+      volumes:
+        - name: setup
+          configMap:
+            name: setup-iptables
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: client-2
+  namespace: pmsm
+spec:
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+  selector:
+    app: client-2
+  type: ClusterIP

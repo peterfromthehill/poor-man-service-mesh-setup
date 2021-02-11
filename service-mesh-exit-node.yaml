@@ -1,0 +1,94 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: service
+  namespace: cloud-svc
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - services
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - ""
+    resources:
+      - endpoints
+    verbs:
+      - get
+      - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: service
+  namespace: cloud-svc
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: service
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: cloud-svc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    pmsm/ignore: "true"
+  name: pmsm-exit
+  namespace: cloud-svc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pmsm-exit
+  template:
+    metadata:
+      annotations:
+        pmsm/ignore: "true"
+      labels:
+        app: pmsm-exit
+    spec:
+      containers:
+        - name: netshoot
+          image: nicolaka/netshoot
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+            privileged: true
+          command:
+            - tail
+            - -f
+            - /dev/null
+        - name: golang
+          image: golang
+          securityContext:
+            runAsUser: 1337
+            runAsGroup: 1337
+            capabilities:
+              add:
+                - NET_ADMIN
+            privileged: true
+          command: ["sh", "-c", "tail -f /dev/null"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pmsm-exit
+  namespace: cloud-svc
+spec:
+  ports:
+    - name: http
+      port: 15006
+      protocol: TCP
+    - name: acme
+      port: 443
+      protocol: TCP
+      targetPort: 15006
+  selector:
+    app: pmsm-exit
+  type: ClusterIP
